@@ -3,6 +3,8 @@
 
 ## villa-X (wip)
 
+Implementation of [ViLLa-X](https://arxiv.org/abs/2507.23682v1), "Enhancing Latent Action Modeling in Vision-Language-Action Models", from Tsinghua
+
 ## Citations
 
 ```bibtex
