@@ -28,7 +28,9 @@ classifiers=[
 
 dependencies = [
     "einops>=0.8.1",
+    "rectified-flow-pytorch>=0.4.4",
     "torch>=2.4",
+    "x-transformers>=2.6.2"
 ]
 
 [project.urls]
