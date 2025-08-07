@@ -7,6 +7,8 @@ from vit_pytorch.vit_3d import ViT as SpaceTimeViT
 
 from vector_quantize_pytorch import FSQ
 
+from rectified_flow_pytorch import RectifiedFlow
+
 # helper functions
 
 def exists(v):
@@ -20,10 +22,17 @@ def default(v, d):
 class LatentActionModel(Module):
     def __init___(
         self,
-        space_time_vit: SpaceTimeViT
+        space_time_vit: SpaceTimeViT,
+        fsq_levels = (8, 5, 5, 5),
+        fsq_num_codebooks = 2, # channel-splitting from nvidia
     ):
         super().__init__()
         self.space_time_vit = space_time_vit
+
+        self.fsq = FSQ(
+            levels = fsq_levels,
+            num_codebooks = fsq_num_codebooks
+        )
 
 class ACTLatent(Module):
     def __init__(
@@ -32,6 +41,7 @@ class ACTLatent(Module):
     ):
         super().__init__()
         self.encoder = encoder
+        self.flow = RectifiedFlow(encoder)
 
 class ACTRobot(Module):
     def __init__(
@@ -40,6 +50,7 @@ class ACTRobot(Module):
     ):
         super().__init__()
         self.encoder = encoder
+        self.flow = RectifiedFlow(encoder)
 
 # the main class
 
