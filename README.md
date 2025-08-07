@@ -1,6 +1,8 @@
 
 <img src="./villa-x.png" width="400px"></img>
 
+<img src="./fig1-lam.png" width="400px"></img>
+
 ## villa-X (wip)
 
 Implementation of [ViLLa-X](https://arxiv.org/abs/2507.23682v1), "Enhancing Latent Action Modeling in Vision-Language-Action Models", from Tsinghua
