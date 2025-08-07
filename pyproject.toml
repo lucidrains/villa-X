@@ -14,7 +14,7 @@ keywords = [
     'robotics',
     'attention mechanism',
     'transformers',
-    'diffusion policy',
+    'flow policy',
     'latent actions'
 ]
 
@@ -32,7 +32,8 @@ dependencies = [
     "rectified-flow-pytorch>=0.4.4",
     "torch>=2.4",
     "x-mlps-pytorch",
-    "x-transformers>=2.6.2"
+    "x-transformers>=2.6.2",
+    "vector-quantize-pytorch>=1.22.18"
 ]
 
 [project.urls]
