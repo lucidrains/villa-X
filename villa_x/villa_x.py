@@ -42,7 +42,8 @@ class FlowTransformerWrapper(Module):
         self,
         dim_input,
         dim_time,
-        transformer: Encoder
+        transformer: Encoder,
+        dropout_vlm_key_values = 0.5
     ):
         super().__init__()
 
@@ -60,6 +61,10 @@ class FlowTransformerWrapper(Module):
 
         self.proj_out = nn.Linear(dim, dim_input)
 
+        # there is a practice circulating around of structured dropout of vlm key values (or is it to the latents? figure out later)
+
+        self.dropout_vlm_key_values = dropout_vlm_key_values
+
     def forward(
         self,
         actions,
@@ -70,11 +75,18 @@ class FlowTransformerWrapper(Module):
         vlm_key_values = None,
         vlm_seq_mask = None
     ):
-        batch_size = actions.shape[0]
+        batch_size, device = actions.shape[0], actions.device
 
         time_cond = self.to_time_cond(times)
 
         tokens = self.proj_in(actions)
+
+        # structured dropout by attn masking out to vlm key / values (50% in paper)
+
+        if exists(vlm_key_values):
+            assert exists(vlm_seq_mask)
+            vlm_kv_dropout = torch.rand(batch_size, device = device) < self.dropout_vlm_key_values
+            vlm_seq_mask = einx.logical_and('b, b n -> b n', vlm_kv_dropout, vlm_seq_mask)
 
         attended = self.transformer(
             tokens,
