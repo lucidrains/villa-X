@@ -12,6 +12,7 @@ from vector_quantize_pytorch import FSQ
 
 from rectified_flow_pytorch import RectifiedFlow
 
+import einx
 from einops import rearrange
 
 # helper functions
@@ -106,8 +107,12 @@ class FlowTransformerWrapper(Module):
 
         # structured dropout by attn masking out to vlm key / values (50% in paper)
 
-        if self.training and exists(vlm_key_values):
-            assert exists(vlm_seq_mask)
+        if self.training and exists(vlm_key_values) and len(vlm_key_values) > 0:
+
+            if not exists(vlm_seq_mask):
+                vlm_seq_len = vlm_key_values[0][0].shape[-2]
+                vlm_seq_mask = torch.ones((batch_size, vlm_seq_len), device = device)
+
             vlm_kv_dropout = torch.rand(batch_size, device = device) < self.dropout_vlm_key_values
             vlm_seq_mask = einx.logical_and('b, b n -> b n', vlm_kv_dropout, vlm_seq_mask)
 
@@ -165,9 +170,10 @@ class ACTLatent(Module):
 
     def forward(
         self,
-        action_latents
+        action_latents,
+        **kwargs
     ):
-        return self.flow_wrapper(action_latents)
+        return self.flow_wrapper(action_latents, **kwargs)
 
 class ACTRobot(Module):
     def __init__(
@@ -200,9 +206,10 @@ class ACTRobot(Module):
     def forward(
         self,
         actions,
-        action_latents
+        action_latents,
+        **kwargs
     ):
-        return self.flow_wrapper(actions, context = action_latents)
+        return self.flow_wrapper(actions, context = action_latents, **kwargs)
 
 # the main class
 
