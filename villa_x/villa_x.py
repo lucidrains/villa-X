@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+from torch import nn
 from torch.nn import Module
 
 from x_transformers import Encoder
@@ -11,6 +12,8 @@ from vector_quantize_pytorch import FSQ
 
 from rectified_flow_pytorch import RectifiedFlow
 
+from einops import rearrange
+
 # helper functions
 
 def exists(v):
@@ -18,6 +21,9 @@ def exists(v):
 
 def default(v, d):
     return v if exists(v) else d
+
+def divisible_by(num, den):
+    return (num % den) == 0
 
 # flow DiT
 
@@ -41,11 +47,28 @@ class FlowTransformerWrapper(Module):
     def __init__(
         self,
         dim_input,
-        dim_time,
-        transformer: Encoder,
+        dim_time = 512,
+        transformer: Encoder | dict = dict(
+            dim = 512,
+            depth = 6,
+            heads = 8,
+            attn_dim_head = 64,
+        ),
+        cross_attend = False,
+        cross_attn_dim_context = 128,
         dropout_vlm_key_values = 0.5
     ):
         super().__init__()
+
+        if isinstance(transformer, dict):
+            transformer = Encoder(
+                dim_condition = dim_time,
+                use_adaptive_layernorm = True,
+                use_adaptive_layerscale = True,
+                cross_attend = cross_attend,
+                cross_attn_dim_context = cross_attn_dim_context,
+                **transformer
+            )
 
         self.transformer = transformer
 
@@ -83,14 +106,14 @@ class FlowTransformerWrapper(Module):
 
         # structured dropout by attn masking out to vlm key / values (50% in paper)
 
-        if exists(vlm_key_values):
+        if self.training and exists(vlm_key_values):
             assert exists(vlm_seq_mask)
             vlm_kv_dropout = torch.rand(batch_size, device = device) < self.dropout_vlm_key_values
             vlm_seq_mask = einx.logical_and('b, b n -> b n', vlm_kv_dropout, vlm_seq_mask)
 
         attended = self.transformer(
             tokens,
-            condition = condition,
+            condition = time_cond,
             context = context,
             context_mask = context_mask,
             self_attn_additional_kv = vlm_key_values,
@@ -121,20 +144,65 @@ class LatentActionModel(Module):
 class ACTLatent(Module):
     def __init__(
         self,
-        flow_dit: FlowTransformerWrapper
+        flow_dit: dict | FlowTransformerWrapper = dict(
+            dim_input = 128
+        )
     ):
         super().__init__()
+
+        if isinstance(flow_dit, dict):
+            flow_dit = FlowTransformerWrapper(**flow_dit)
+
         self.flow_dit = flow_dit
         self.flow_wrapper = RectifiedFlow(flow_dit)
+
+    def sample(
+        self,
+        *args,
+        **kwargs
+    ):
+        return self.flow_wrapper.sample(*args, **kwargs)
+
+    def forward(
+        self,
+        action_latents
+    ):
+        return self.flow_wrapper(action_latents)
 
 class ACTRobot(Module):
     def __init__(
         self,
-        flow_dit: FlowTransformerWrapper
+        dim_action_latent = 128,
+        flow_dit: dict | FlowTransformerWrapper = dict(
+            dim_input = 20
+        )
     ):
         super().__init__()
+
+        if isinstance(flow_dit, dict):
+            flow_dit = FlowTransformerWrapper(
+                cross_attend = True,
+                cross_attn_dim_context = dim_action_latent,
+                **flow_dit
+            )
+
         self.flow_dit = flow_dit
         self.flow_wrapper = RectifiedFlow(flow_dit)
+
+    def sample(
+        self,
+        action_latents,
+        *args,
+        **kwargs
+    ):
+        return self.flow_wrapper.sample(*args, context = action_latents, **kwargs)
+
+    def forward(
+        self,
+        actions,
+        action_latents
+    ):
+        return self.flow_wrapper(actions, context = action_latents)
 
 # the main class
 
