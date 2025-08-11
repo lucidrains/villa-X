@@ -4,8 +4,10 @@ param = pytest.mark.parametrize
 import torch
 
 @param('send_vlm_key_values', (False, True))
+@param('send_wrist_image', (False, True))
 def test_villa_x(
-    send_vlm_key_values
+    send_vlm_key_values,
+    send_wrist_image
 ):
     from villa_x import ACTLatent, ACTRobot
 
@@ -25,6 +27,12 @@ def test_villa_x(
             (torch.randn(1, 4, 32, 64), torch.randn(1, 4, 32, 64))
         ]
 
+    # maybe wrist image
+
+    wrist_image = None
+    if send_wrist_image:
+        wrist_image = torch.randn(1, 3, 224, 224)
+
     # training
 
     action_latents = torch.randn(1, 32, 128)
@@ -32,13 +40,13 @@ def test_villa_x(
     loss.backward()
 
     actions = torch.randn(1, 128, 20)
-    loss = act_robot(actions, action_latents,vlm_key_values = vlm_kv)
+    loss = act_robot(actions, action_latents, vlm_key_values = vlm_kv, wrist_image = wrist_image)
     loss.backward()
 
     # hierarchical inference
 
     sampled_action_latents = act_latent.sample()
 
-    sampled_actions = act_robot.sample(sampled_action_latents, vlm_key_values = vlm_kv)
+    sampled_actions = act_robot.sample(sampled_action_latents, vlm_key_values = vlm_kv, wrist_image = wrist_image)
 
     assert sampled_actions.shape == (1, 128, 20)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from torch import nn
+from torch import nn, cat
 from torch.nn import Module
 
 from x_transformers import Encoder
@@ -12,8 +12,11 @@ from vector_quantize_pytorch import FSQ
 
 from rectified_flow_pytorch import RectifiedFlow
 
+from torchvision.models import resnet18, ResNet18_Weights
+
 import einx
 from einops import rearrange
+from einops.layers.torch import Rearrange
 
 # helper functions
 
@@ -97,13 +100,20 @@ class FlowTransformerWrapper(Module):
         context = None,
         context_mask = None,
         vlm_key_values = None,
-        vlm_seq_mask = None
+        vlm_seq_mask = None,
+        prepend_tokens = None
     ):
         batch_size, device = actions.shape[0], actions.device
 
         time_cond = self.to_time_cond(times)
 
         tokens = self.proj_in(actions)
+
+        # maybe prepend embeds
+
+        if exists(prepend_tokens):
+            prepend_len = prepend_tokens.shape[1]
+            tokens = cat((prepend_tokens, tokens), dim = 1)
 
         # structured dropout by attn masking out to vlm key / values (50% in paper)
 
@@ -125,6 +135,9 @@ class FlowTransformerWrapper(Module):
             detach_additional_kv = True,
             additional_kv_mask = vlm_seq_mask
         )
+
+        if exists(prepend_tokens):
+            attended = attended[:, prepend_len:]
 
         pred = self.proj_out(attended)
         return pred
@@ -195,21 +208,58 @@ class ACTRobot(Module):
         self.flow_dit = flow_dit
         self.flow_wrapper = RectifiedFlow(flow_dit)
 
+        # take care of wrist image tokens
+        # only provided for ACT-Robot for some reason
+    
+        weights = ResNet18_Weights.DEFAULT
+
+        self.wrist_image_transform = weights.transforms()
+
+        self.wrist_encoder = resnet18(weights = weights, progress = False)
+
+        self.wrist_encoder.avgpool = nn.Identity()
+
+        self.wrist_encoder.fc = Rearrange('b (c n) -> b n c', c = 512)
+
+        self.wrist_feats_to_encoded = nn.Linear(512, flow_dit.transformer.dim)
+
+    def encode_wrist_state(
+        self,
+        image
+    ):
+        transformed = self.wrist_image_transform(image)
+        wrist_feats = self.wrist_encoder(transformed)
+        return self.wrist_feats_to_encoded(wrist_feats)
+
     def sample(
         self,
         action_latents,
         *args,
+        wrist_image = None,
         **kwargs
     ):
-        return self.flow_wrapper.sample(*args, context = action_latents, **kwargs)
+
+        prepend_tokens = None
+
+        if exists(wrist_image):
+            prepend_tokens = self.encode_wrist_state(wrist_image)
+
+        return self.flow_wrapper.sample(*args, context = action_latents, prepend_tokens = prepend_tokens, **kwargs)
 
     def forward(
         self,
         actions,
         action_latents,
+        *,
+        wrist_image = None, # (b c h w)
         **kwargs
     ):
-        return self.flow_wrapper(actions, context = action_latents, **kwargs)
+        prepend_tokens = None
+
+        if exists(wrist_image):
+            prepend_tokens = self.encode_wrist_state(wrist_image)
+
+        return self.flow_wrapper(actions, context = action_latents, prepend_tokens = prepend_tokens, **kwargs)
 
 # the main class
 

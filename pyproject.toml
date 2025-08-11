@@ -1,6 +1,6 @@
 [project]
 name = "ViLLa-X"
-version = "0.0.1"
+version = "0.0.2"
 description = "ViLLa-X"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -31,6 +31,7 @@ dependencies = [
     "einops>=0.8.1",
     "rectified-flow-pytorch>=0.4.5",
     "torch>=2.4",
+    "torchvision",
     "x-mlps-pytorch",
     "x-transformers>=2.6.7",
     "vector-quantize-pytorch>=1.22.18",
