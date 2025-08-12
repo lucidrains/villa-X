@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from torch import nn, cat
+from torch import nn, cat, Tensor
 from torch.nn import Module
 
 from x_transformers import Encoder
@@ -18,6 +18,12 @@ import einx
 from einops import rearrange
 from einops.layers.torch import Rearrange
 
+from transformers import AutoModelForVision2Seq, AutoProcessor
+
+# constants
+
+KeyValues = list[tuple[Tensor, Tensor]]
+
 # helper functions
 
 def exists(v):
@@ -28,6 +34,28 @@ def default(v, d):
 
 def divisible_by(num, den):
     return (num % den) == 0
+
+# vlm
+
+class VLM(Module):
+    def __init__(
+        self,
+        model_name = 'google/paligemma-3b-pt-224'
+    ):
+        super().__init__()
+
+        self.vlm = AutoModelForVision2Seq.from_pretrained(model_name)
+        self.processor = AutoProcessor.from_pretrained(model_name)
+
+    def forward(
+        self,
+        images: Tensor,
+        commands: list[str]
+
+    ) -> KeyValues:
+
+        # extract the cached key / values
+        raise NotImplementedError
 
 # flow DiT
 
@@ -99,7 +127,7 @@ class FlowTransformerWrapper(Module):
         times,
         context = None,
         context_mask = None,
-        vlm_key_values = None,
+        vlm_key_values: KeyValues | None = None,
         vlm_seq_mask = None,
         prepend_tokens = None
     ):

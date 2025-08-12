@@ -32,6 +32,7 @@ dependencies = [
     "rectified-flow-pytorch>=0.4.5",
     "torch>=2.4",
     "torchvision",
+    "transformers",
     "x-mlps-pytorch",
     "x-transformers>=2.6.7",
     "vector-quantize-pytorch>=1.22.18",
