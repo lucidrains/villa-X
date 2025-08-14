@@ -15,7 +15,7 @@ from rectified_flow_pytorch import RectifiedFlow
 from torchvision.models import resnet18, ResNet18_Weights
 
 import einx
-from einops import rearrange
+from einops import rearrange, pack
 from einops.layers.torch import Rearrange
 
 from transformers import AutoModelForVision2Seq, AutoProcessor
@@ -219,6 +219,7 @@ class ACTLatent(Module):
 class ACTRobot(Module):
     def __init__(
         self,
+        dim_proprio = None,
         dim_action_latent = 128,
         flow_dit: dict | FlowTransformerWrapper = dict(
             dim_input = 20
@@ -236,6 +237,8 @@ class ACTRobot(Module):
         self.flow_dit = flow_dit
         self.flow_wrapper = RectifiedFlow(flow_dit)
 
+        dim_model = flow_dit.transformer.dim
+
         # take care of wrist image tokens
         # only provided for ACT-Robot for some reason
     
@@ -249,7 +252,11 @@ class ACTRobot(Module):
 
         self.wrist_encoder.fc = Rearrange('b (c n) -> b n c', c = 512)
 
-        self.wrist_feats_to_encoded = nn.Linear(512, flow_dit.transformer.dim)
+        self.wrist_feats_to_encoded = nn.Linear(512, dim_model)
+
+        # proprio token at time t
+
+        self.encode_proprio = nn.Linear(dim_proprio, dim_model) if exists(dim_proprio) else None
 
     def encode_wrist_state(
         self,
@@ -280,14 +287,27 @@ class ACTRobot(Module):
         action_latents,
         *,
         wrist_image = None, # (b c h w)
+        proprio = None,
         **kwargs
     ):
-        prepend_tokens = None
+        prepend_tokens = []
 
         if exists(wrist_image):
-            prepend_tokens = self.encode_wrist_state(wrist_image)
+            wrist_tokens = self.encode_wrist_state(wrist_image)
+            prepend_tokens.append(wrist_tokens)
 
-        return self.flow_wrapper(actions, context = action_latents, prepend_tokens = prepend_tokens, **kwargs)
+        if exists(proprio):
+            assert exists(self.encode_proprio), '`dim_proprio` must be set on init to accept proprioception input'
+
+            proprio_token = self.encode_proprio(proprio)
+            prepend_tokens.append(proprio_token)
+
+        prepend_tokens_to_dit = None
+
+        if len(prepend_tokens) > 0:
+            prepend_tokens_to_dit, _ = pack(prepend_tokens, 'b * d')
+
+        return self.flow_wrapper(actions, context = action_latents, prepend_tokens = prepend_tokens_to_dit, **kwargs)
 
 # the main class
 

@@ -13,7 +13,7 @@ def test_villa_x(
 
     act_latent = ACTLatent()
 
-    act_robot = ACTRobot()
+    act_robot = ACTRobot(dim_proprio = 11)
 
     # vlm key values
 
@@ -40,7 +40,9 @@ def test_villa_x(
     loss.backward()
 
     actions = torch.randn(1, 128, 20)
-    loss = act_robot(actions, action_latents, vlm_key_values = vlm_kv, wrist_image = wrist_image)
+    proprio = torch.randn(1, 11)
+
+    loss = act_robot(actions, action_latents, proprio = proprio, vlm_key_values = vlm_kv, wrist_image = wrist_image)
     loss.backward()
 
     # hierarchical inference
