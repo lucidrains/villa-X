@@ -9,7 +9,8 @@ from x_transformers import (
     AttentionPool
 )
 
-from vit_pytorch import ViT, Extractor
+from vit_pytorch import ViT
+from vit_pytorch.extractor import Extractor
 
 from vector_quantize_pytorch import FSQ
 
