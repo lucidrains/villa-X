@@ -4,9 +4,12 @@ import torch
 from torch import nn, cat, Tensor
 from torch.nn import Module
 
-from x_transformers import Encoder
+from x_transformers import (
+    Encoder,
+    AttentionPool
+)
 
-from vit_pytorch.vit_3d import ViT as SpaceTimeViT
+from vit_pytorch import ViT, Extractor
 
 from vector_quantize_pytorch import FSQ
 
@@ -15,7 +18,7 @@ from rectified_flow_pytorch import RectifiedFlow
 from torchvision.models import resnet18, ResNet18_Weights
 
 import einx
-from einops import rearrange, pack
+from einops import rearrange, pack, unpack
 from einops.layers.torch import Rearrange
 
 from transformers import AutoModelForVision2Seq, AutoProcessor
@@ -34,6 +37,16 @@ def default(v, d):
 
 def divisible_by(num, den):
     return (num % den) == 0
+
+def pack_with_inverse(t, pattern):
+    packed, packed_shape = pack([t], pattern)
+
+    def inverse_fn(out, inv_pattern = None):
+        inv_pattern = default(inv_pattern, pattern)
+        out, = unpack(out, packed_shape, inv_pattern)
+        return out
+
+    return packed, inverse_fn
 
 # vlm
 
@@ -175,17 +188,58 @@ class FlowTransformerWrapper(Module):
 class LatentActionModel(Module):
     def __init___(
         self,
-        space_time_vit: SpaceTimeViT,
+        dim,
+        vit: ViT,
+        dim_image_model = 512,
+        idm_depth = 2,
         fsq_levels = (8, 5, 5, 5),
+        idm_kwargs: dict = dict(),
+        fdm_kwargs: dict = dict(),
+        proprio_fdm_kwargs: dict = dict(),
         fsq_num_codebooks = 2, # channel-splitting from nvidia
     ):
         super().__init__()
-        self.space_time_vit = space_time_vit
+        self.vit = Extractor(vit, return_embeddings_only = True)
+
+        self.to_observation_tokens = AttentionPool(dim = dim, dim_context = dim_image_model)
+
+        self.inverse_dynamic_model = Decoder(dim = dim, idm_depth = idm_depth, **idm_kwargs)
+
+        self.forward_dynamic_model = Decoder(dim = dim, fdm_depth = fdm_depth, **fdm_kwargs)
+
+        self.proprio_forward_dynamic_model = Decoder(dim = dim, fdm_depth = proprio_fdm_depth, **proprio_fdm_kwargs)
 
         self.fsq = FSQ(
             levels = fsq_levels,
             num_codebooks = fsq_num_codebooks
         )
+
+    def forward(
+        self,
+        video # (b c t h w)
+    ):
+
+        images = rearrange(video, 'b c t h w -> b t c h w')
+
+        images, inverse_pack_time = pack_with_inverse(images, '* c h w')
+
+        embeddings = self.vit(images) # b n d
+
+        observe_tokens = self.to_observation_tokens(embeddings)
+
+        observe_tokens = inverse_pack_time(observe_tokens) # b t d
+
+        latent_actions = self.inverse_dynamic_model(observe_tokens)
+
+        quantized_latent_actions, _ = self.fsq(latent_actions)
+
+        latent_actions = latent_actions[:, 1:]
+        quantized_latent_actions = quantized_latent_actions[:, 1:]
+
+        recon_observe_tokens = self.forward_dynamic_model(quantized_latent_actions)
+
+        recon_proprio_and_action_tokens = self.proprio_forward_dynamic_model(quantized_latent_actions)
+
 
 class ACTLatent(Module):
     def __init__(
