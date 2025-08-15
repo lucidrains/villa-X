@@ -190,6 +190,8 @@ class LatentActionModel(Module):
         self,
         dim,
         vit: ViT,
+        dim_proprio,
+        dim_actions,
         dim_image_model = 512,
         idm_depth = 2,
         fsq_levels = (8, 5, 5, 5),
@@ -209,6 +211,11 @@ class LatentActionModel(Module):
 
         self.proprio_forward_dynamic_model = Decoder(dim = dim, fdm_depth = proprio_fdm_depth, **proprio_fdm_kwargs)
 
+        self.to_proprio_fdm_tokens = nn.Linear(dim_proprio + dim, dim)
+
+        self.to_pred_proprio = nn.Linear(dim, dim_proprio)
+        self.to_pred_actions = nn.Linear(dim, dim_actions)
+
         self.fsq = FSQ(
             levels = fsq_levels,
             num_codebooks = fsq_num_codebooks
@@ -216,7 +223,9 @@ class LatentActionModel(Module):
 
     def forward(
         self,
-        video # (b c t h w)
+        video,   # (b c t h w)
+        proprio, # (b t dp)
+        actions  # (b t da)
     ):
 
         images = rearrange(video, 'b c t h w -> b t c h w')
@@ -238,8 +247,18 @@ class LatentActionModel(Module):
 
         recon_observe_tokens = self.forward_dynamic_model(quantized_latent_actions)
 
-        recon_proprio_and_action_tokens = self.proprio_forward_dynamic_model(quantized_latent_actions)
+        proprio, proprio_target = proprio[:, :-1], proprio[:, 1:]
+        actions_target = actions[:, 1:]
 
+        proprio_fdm_tokens = self.to_proprio_fdm_tokens(cat((quantized_latent_actions, proprio), dim = -1))
+
+        proprio_fdm_embed = self.proprio_forward_dynamic_model(quantized_latent_actions)
+
+        pred_proprio = self.to_pred_proprio(proprio_fdm_embed)
+        pred_action = self.to_pred_actions(proprio_fdm_embed)
+
+        ar_proprio_loss = F.l1_loss(pred_proprio, proprio_target)
+        ar_action_loss = F.l1_loss(pred_action, actions_target)
 
 class ACTLatent(Module):
     def __init__(
