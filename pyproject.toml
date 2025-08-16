@@ -27,6 +27,7 @@ classifiers=[
 ]
 
 dependencies = [
+    "axial-positional-embedding>=0.3.12",
     "einx>=0.3.0",
     "einops>=0.8.1",
     "rectified-flow-pytorch>=0.4.5",

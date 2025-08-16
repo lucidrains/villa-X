@@ -6,7 +6,8 @@ from torch.nn import Module
 
 from x_transformers import (
     Encoder,
-    AttentionPool
+    AttentionPool,
+    CrossAttender
 )
 
 from vit_pytorch import ViT
@@ -23,6 +24,8 @@ from einops import rearrange, pack, unpack
 from einops.layers.torch import Rearrange
 
 from transformers import AutoModelForVision2Seq, AutoProcessor
+
+from axial_positional_embedding import ContinuousAxialPositionalEmbedding
 
 # constants
 
@@ -193,9 +196,14 @@ class LatentActionModel(Module):
         vit: ViT,
         dim_proprio,
         dim_actions,
+        channels = 3,
+        patch_size = 14,
         dim_image_model = 512,
         idm_depth = 2,
         fsq_levels = (8, 5, 5, 5),
+        recon_vit_kwargs: dict = dict(
+            depth = 4,
+        ),
         idm_kwargs: dict = dict(),
         fdm_kwargs: dict = dict(),
         proprio_fdm_kwargs: dict = dict(),
@@ -222,12 +230,27 @@ class LatentActionModel(Module):
             num_codebooks = fsq_num_codebooks
         )
 
+        self.recon_spatial_queries = ContinuousAxialPositionalEmbedding(
+            dim = dim_image_model,
+            num_axial_dims = 2
+        )
+
+        self.recon_vit = Encoder(dim = dim_image_model, **recon_vit_kwargs)
+
+        self.patch_size = patch_size
+
+        self.to_recon_pred = nn.Sequential(
+            nn.Linear(dim_image_model, channels * patch_size ** 2),
+            Rearrange('b (h w) (p1 p2 c) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size)
+        )
+
     def forward(
         self,
         video,   # (b c t h w)
         proprio, # (b t dp)
         actions  # (b t da)
     ):
+        batch, time = video.shape[0], video.shape[2]
 
         images = rearrange(video, 'b c t h w -> b t c h w')
 
@@ -248,6 +271,19 @@ class LatentActionModel(Module):
 
         recon_observe_tokens = self.forward_dynamic_model(quantized_latent_actions)
 
+        video_height_patches, video_width_patches = (video.shape[-2] // self.patch_size), (video.shape[-1] // self.patch_size)
+        detr_queries = self.recon_detr_queries((video_height_patches, video_width_patches))
+
+        detr_queries = repeat(detr_queries, '... -> bt ...', b = batch * time)
+
+        recon_tokens, packed_shape = pack((recon_observe_tokens, detr_queries), 'b * d')
+
+        attended_recon_tokens = self.recon_vit(recon_tokens)
+
+        recon_video = self.to_recon_pred(attended_recon_tokens)
+
+        ar_fdm_loss = F.l1_loss(rearrange(video[:, :, 1:], 'b c t h w -> (b t) c h w'), recon_video)
+
         proprio, proprio_target = proprio[:, :-1], proprio[:, 1:]
         actions_target = actions[:, 1:]
 
@@ -260,6 +296,18 @@ class LatentActionModel(Module):
 
         ar_proprio_loss = F.l1_loss(pred_proprio, proprio_target)
         ar_action_loss = F.l1_loss(pred_action, actions_target)
+
+        # losses
+
+        total_loss = (
+            ar_fdm_loss + 
+            ar_proprio_loss +
+            ar_action_loss
+        )
+
+        loss_breakdown = (ar_fdm_loss, ar_proprio_loss, ar_action_loss)
+
+        return total_loss, loss_breakdown
 
 class ACTLatent(Module):
     def __init__(
