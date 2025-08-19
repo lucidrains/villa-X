@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import torch
 from torch import nn, cat, Tensor
+import torch.nn.functional as F
 from torch.nn import Module
 
 from x_transformers import (
     Encoder,
+    Decoder,
     AttentionPool,
     CrossAttender
 )
@@ -20,7 +22,7 @@ from rectified_flow_pytorch import RectifiedFlow
 from torchvision.models import resnet18, ResNet18_Weights
 
 import einx
-from einops import rearrange, pack, unpack
+from einops import rearrange, repeat, pack, unpack
 from einops.layers.torch import Rearrange
 
 from transformers import AutoModelForVision2Seq, AutoProcessor
@@ -190,17 +192,19 @@ class FlowTransformerWrapper(Module):
 # ACT latent
 
 class LatentActionModel(Module):
-    def __init___(
+    def __init__(
         self,
         dim,
         vit: ViT,
         dim_proprio,
         dim_actions,
         channels = 3,
-        patch_size = 14,
+        patch_size = 32,
         dim_image_model = 512,
         idm_depth = 2,
-        fsq_levels = (8, 5, 5, 5),
+        fdm_depth = 2,
+        proprio_fdm_depth = 2,
+        fsq_levels = [8, 5, 5, 5],
         recon_vit_kwargs: dict = dict(
             depth = 4,
         ),
@@ -210,15 +214,17 @@ class LatentActionModel(Module):
         fsq_num_codebooks = 2, # channel-splitting from nvidia
     ):
         super().__init__()
+        self.dim = dim
+
         self.vit = Extractor(vit, return_embeddings_only = True)
 
         self.to_observation_tokens = AttentionPool(dim = dim, dim_context = dim_image_model)
 
-        self.inverse_dynamic_model = Decoder(dim = dim, idm_depth = idm_depth, **idm_kwargs)
+        self.inverse_dynamic_model = Decoder(dim = dim, depth = idm_depth, **idm_kwargs)
 
-        self.forward_dynamic_model = Decoder(dim = dim, fdm_depth = fdm_depth, **fdm_kwargs)
+        self.forward_dynamic_model = Decoder(dim = dim, depth = fdm_depth, **fdm_kwargs)
 
-        self.proprio_forward_dynamic_model = Decoder(dim = dim, fdm_depth = proprio_fdm_depth, **proprio_fdm_kwargs)
+        self.proprio_forward_dynamic_model = Decoder(dim = dim, depth = proprio_fdm_depth, **proprio_fdm_kwargs)
 
         self.to_proprio_fdm_tokens = nn.Linear(dim_proprio + dim, dim)
 
@@ -226,6 +232,7 @@ class LatentActionModel(Module):
         self.to_pred_actions = nn.Linear(dim, dim_actions)
 
         self.fsq = FSQ(
+            dim = dim,
             levels = fsq_levels,
             num_codebooks = fsq_num_codebooks
         )
@@ -241,16 +248,18 @@ class LatentActionModel(Module):
 
         self.to_recon_pred = nn.Sequential(
             nn.Linear(dim_image_model, channels * patch_size ** 2),
-            Rearrange('b (h w) (p1 p2 c) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size)
+            Rearrange('b h w (p1 p2 c) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size)
         )
 
     def forward(
         self,
-        video,   # (b c t h w)
-        proprio, # (b t dp)
-        actions  # (b t da)
+        video,          # (b c t h w)
+        proprio = None, # (b t dp)
+        actions = None  # (b t da)
     ):
         batch, time = video.shape[0], video.shape[2]
+
+        return_loss = exists(proprio) and exists(actions)
 
         images = rearrange(video, 'b c t h w -> b t c h w')
 
@@ -258,13 +267,19 @@ class LatentActionModel(Module):
 
         embeddings = self.vit(images) # b n d
 
+        assert embeddings.shape[-1] == self.dim
+
         observe_tokens = self.to_observation_tokens(embeddings)
 
-        observe_tokens = inverse_pack_time(observe_tokens) # b t d
+        observe_tokens = rearrange(observe_tokens, 'bt 1 d -> bt d')
+        observe_tokens = inverse_pack_time(observe_tokens, '* d') # b t d
 
         latent_actions = self.inverse_dynamic_model(observe_tokens)
 
         quantized_latent_actions, _ = self.fsq(latent_actions)
+
+        if not return_loss:
+            return quantized_latent_actions[:, 1:]
 
         latent_actions = latent_actions[:, 1:]
         quantized_latent_actions = quantized_latent_actions[:, 1:]
@@ -272,13 +287,20 @@ class LatentActionModel(Module):
         recon_observe_tokens = self.forward_dynamic_model(quantized_latent_actions)
 
         video_height_patches, video_width_patches = (video.shape[-2] // self.patch_size), (video.shape[-1] // self.patch_size)
-        detr_queries = self.recon_detr_queries((video_height_patches, video_width_patches))
+        detr_queries = self.recon_spatial_queries((video_height_patches, video_width_patches))
 
-        detr_queries = repeat(detr_queries, '... -> bt ...', b = batch * time)
+        detr_queries = repeat(detr_queries, '... -> bt ...', bt = batch * (time - 1))
+        recon_observe_tokens = rearrange(recon_observe_tokens, 'b t ... -> (b t) ...')
 
         recon_tokens, packed_shape = pack((recon_observe_tokens, detr_queries), 'b * d')
 
         attended_recon_tokens = self.recon_vit(recon_tokens)
+
+        attended_recon_tokens = attended_recon_tokens[:, 1:] # keep only detr queries
+
+        # assume square
+
+        attended_recon_tokens = rearrange(attended_recon_tokens, 'b (h w) ... -> b h w ...', h = video_height_patches)
 
         recon_video = self.to_recon_pred(attended_recon_tokens)
 

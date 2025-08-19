@@ -3,6 +3,39 @@ param = pytest.mark.parametrize
 
 import torch
 
+def test_lam():
+    from villa_x import LatentActionModel
+    from vit_pytorch import ViT
+
+    lam = LatentActionModel(
+        dim = 512,
+        dim_proprio = 17,
+        dim_actions = 20,
+        patch_size = 32,
+        vit = ViT(
+            image_size = 256,
+            patch_size = 32,
+            num_classes = 1000,
+            dim = 512,
+            depth = 6,
+            heads = 16,
+            mlp_dim = 2048,
+            dropout = 0.1,
+            emb_dropout = 0.1
+        ),
+    )
+
+    video = torch.randn(2, 3, 8, 256, 256)
+    proprio = torch.randn(2, 8, 17)
+    actions = torch.randn(2, 8, 20)
+
+    loss, breakdown = lam(video, proprio, actions)
+    loss.backward()
+
+    latent_action_tokens = lam(video)
+
+    assert latent_action_tokens.shape == (2, 8 - 1, 512)
+
 @param('send_vlm_key_values', (False, True))
 @param('send_wrist_image', (False, True))
 def test_villa_x(
