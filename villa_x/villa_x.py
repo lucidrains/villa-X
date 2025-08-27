@@ -466,3 +466,18 @@ class ViLLaX(Module):
         self.lam = lam
         self.act_latent = act_latent
         self.act_robot = act_robot
+
+    def forward(
+        self,
+        vlm_key_values: KeyValues,
+        wrist_image = None
+    ):
+        sampled_action_latents = self.act_latent.sample(vlm_key_values = vlm_key_values)
+
+        sampled_actions = self.act_robot.sample(
+            sampled_action_latents,
+            vlm_key_values = vlm_key_values,
+            wrist_image = wrist_image
+        )
+
+        return sampled_actions

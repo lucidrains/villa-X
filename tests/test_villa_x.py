@@ -42,7 +42,12 @@ def test_villa_x(
     send_vlm_key_values,
     send_wrist_image
 ):
-    from villa_x import ACTLatent, ACTRobot
+    from villa_x import (
+        LatentActionModel,
+        ACTLatent,
+        ACTRobot,
+        ViLLaX
+    )
 
     act_latent = ACTLatent()
 
@@ -80,8 +85,28 @@ def test_villa_x(
 
     # hierarchical inference
 
-    sampled_action_latents = act_latent.sample()
+    villa_x = ViLLaX(
+        lam = LatentActionModel(
+            dim = 512,
+            dim_proprio = 17,
+            dim_actions = 20,
+            patch_size = 32,
+            vit = dict(
+                image_size = 256,
+                patch_size = 32,
+                num_classes = 1000,
+                dim = 512,
+                depth = 6,
+                heads = 16,
+                mlp_dim = 2048,
+                dropout = 0.1,
+                emb_dropout = 0.1
+            ),
+        ),
+        act_latent = act_latent,
+        act_robot = act_robot
+    )
 
-    sampled_actions = act_robot.sample(sampled_action_latents, vlm_key_values = vlm_kv, wrist_image = wrist_image)
+    sampled_actions = villa_x(vlm_key_values = vlm_kv)
 
     assert sampled_actions.shape == (1, 128, 20)
